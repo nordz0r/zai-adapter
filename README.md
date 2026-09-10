@@ -12,6 +12,8 @@ OpenAI-совместимый endpoint для Z.AI GLM Coding Plan с **подп
 | GET | `/healthz` | health-проба |
 | GET | `/v1/models` | список моделей (OpenAI-формат) |
 | POST | `/v1/chat/completions` | OpenAI chat → подписанный Anthropic-wire upstream (`/api/anthropic`); stream-запросы отдаются одним SSE-чанком |
+| POST | `/v1/messages` | **Anthropic-совместимый passthrough 1:1**: тело уходит в подписанный upstream без трансляции (tools, thinking, system — без потерь); `stream: true` проксируется как нативный Anthropic SSE |
+| POST | `/v1/messages/count_tokens` | Anthropic count_tokens, тот же passthrough 1:1 |
 | GET | `/quota` | квота плана из `api.z.ai/api/monitor/usage/quota/limit` (JSON) |
 | GET | `/quota/text` | человекочитаемая строка для cron |
 

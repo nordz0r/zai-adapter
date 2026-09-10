@@ -120,3 +120,93 @@ def test_free_window_guard(monkeypatch):
         "model": "glm-5.3-flash", "messages": [{"role": "user", "content": "hi"}]})
     assert resp2.status_code == 200
 
+
+
+def _fresh_pool(monkeypatch):
+    monkeypatch.setattr(app_module, "_pool", None)
+    monkeypatch.setattr(app_module, "_pool_keys_str", None)
+
+
+def test_anthropic_passthrough_roundtrip(monkeypatch):
+    _fresh_pool(monkeypatch)
+    upstream_body = {
+        "id": "msg_1", "type": "message", "role": "assistant", "model": "glm-5.3-flash",
+        "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
+        "usage": {"input_tokens": 3, "output_tokens": 2},
+    }
+
+    def upstream(request):
+        assert request.url.path.endswith("/v1/messages")
+        body = json.loads(request.content)
+        # 1:1: native anthropic fields reach upstream untouched
+        assert body["tools"][0]["name"] == "get_weather"
+        assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+        assert body["system"] == "be brief"
+        return httpx.Response(200, json=upstream_body)
+
+    client, counter = _make_client(monkeypatch, upstream)
+    payload = {
+        "model": "glm-5.3-flash", "max_tokens": 256, "system": "be brief",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+    }
+    resp = client.post("/v1/messages", json=payload)
+    assert resp.status_code == 200
+    assert resp.json() == upstream_body
+    assert counter["handshakes"] == 1
+
+
+def test_anthropic_passthrough_stream(monkeypatch):
+    sse = 'event: message_start\ndata: {"type":"message_start"}\n\nevent: ping\ndata: {"type":"ping"}\n\n'
+
+    def upstream(request):
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    client, _ = _make_client(monkeypatch, upstream)
+    resp = client.post("/v1/messages", json={
+        "model": "glm-5.3-flash", "max_tokens": 16, "stream": True,
+        "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    assert "event: message_start" in resp.text
+
+
+def test_anthropic_default_max_tokens(monkeypatch):
+    def upstream(request):
+        body = json.loads(request.content)
+        assert body["max_tokens"] == 4096
+        return httpx.Response(200, json={"type": "message"})
+
+    client, _ = _make_client(monkeypatch, upstream)
+    resp = client.post("/v1/messages", json={
+        "model": "glm-5.3-flash", "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+
+
+def test_anthropic_upstream_error_passthrough(monkeypatch):
+    def upstream(request):
+        return httpx.Response(429, json={"type": "error",
+                                         "error": {"type": "rate_limit_error"}})
+
+    client, _ = _make_client(monkeypatch, upstream)
+    resp = client.post("/v1/messages", json={
+        "model": "glm-5.3-flash", "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}]})
+    # single key in pool: 429 is relayed verbatim, not mapped to 502
+    assert resp.status_code == 429
+    assert resp.json()["error"]["type"] == "rate_limit_error"
+
+
+def test_anthropic_validates_body(monkeypatch):
+    client, counter = _make_client(monkeypatch, _upstream_ok)
+    no_model = client.post("/v1/messages", json={"messages": [{"role": "user", "content": "x"}]})
+    assert no_model.status_code == 400
+    empty = client.post("/v1/messages", json={"model": "glm-5.3-flash", "messages": []})
+    assert empty.status_code == 400
+    broken = client.post("/v1/messages", content="{not json",
+                         headers={"content-type": "application/json"})
+    assert broken.status_code == 400
+    assert counter["handshakes"] == 0

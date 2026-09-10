@@ -17,7 +17,7 @@ logger = logging.getLogger("zai_adapter")
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .signing import KeyPool, Signer, parse_quota
 from .translate import (StreamTranslator, TranslationError, anthropic_to_openai_chunks,
@@ -359,6 +359,115 @@ async def chat_completions(request: Request):
             return JSONResponse(anthropic_to_openai_response(data, model))
 
     raise HTTPException(status_code=502, detail=last_error_detail or "all keys in pool failed")
+
+
+@app.post("/v1/messages")
+@app.post("/messages")
+async def anthropic_messages(request: Request):
+    """Anthropic-compatible passthrough: the body reaches the signed upstream
+    1:1 (no OpenAI translation), so tools/thinking/system pass without loss.
+    stream requests relay upstream Anthropic SSE verbatim; non-stream upstream
+    errors are relayed verbatim too."""
+    _check_auth(request)
+    check_free_window_guard()
+    pool = _require_pool()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if (not isinstance(body, dict) or not body.get("model")
+            or not isinstance(body.get("messages"), list) or not body["messages"]):
+        raise HTTPException(status_code=400, detail="model and non-empty messages[] are required")
+    body = {**body, "max_tokens": body.get("max_tokens") or 4096}
+
+    client = _get_http_client(request)
+    all_keys = pool.all_keys()
+    last_error_detail = ""
+
+    for attempt in range(len(all_keys)):
+        api_key, signer = pool.get_signer()
+        headers = signer.signed_headers(f"adapter-{secrets.token_hex(6)}")
+        headers["Content-Type"] = "application/json"
+        headers["anthropic-version"] = "2023-06-01"
+        headers["x-api-key"] = api_key
+
+        if body.get("stream"):
+            req = client.build_request("POST", f"{UPSTREAM}/v1/messages", json=body, headers=headers)
+            resp = await client.send(req, stream=True)
+            if resp.status_code == 401:
+                signer.invalidate()
+                headers = signer.signed_headers(f"adapter-{secrets.token_hex(6)}")
+                headers["Content-Type"] = "application/json"
+                headers["anthropic-version"] = "2023-06-01"
+                headers["x-api-key"] = api_key
+                await resp.aclose()
+                req = client.build_request("POST", f"{UPSTREAM}/v1/messages", json=body, headers=headers)
+                resp = await client.send(req, stream=True)
+            if resp.status_code in (429, 503) or resp.status_code >= 400:
+                err_bytes = await resp.aread()
+                last_error_detail = f"upstream {resp.status_code}: {err_bytes.decode('utf-8', errors='replace')[:300]}"
+                await resp.aclose()
+                logger.warning("Upstream error on key %s: %s", api_key[:10], last_error_detail)
+                if resp.status_code == 429 or "1313" in last_error_detail or "1113" in last_error_detail:
+                    pool.mark_cooldown(api_key, duration_s=60.0)
+                    if attempt < len(all_keys) - 1:
+                        continue
+                raise HTTPException(status_code=502, detail=last_error_detail)
+
+            async def relay(resp=resp):
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+                finally:
+                    await resp.aclose()
+
+            return StreamingResponse(relay(), media_type=resp.headers.get("content-type", "text/event-stream"))
+
+        try:
+            resp = await client.post(f"{UPSTREAM}/v1/messages", json=body, headers=headers)
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="upstream timeout")
+        if resp.status_code == 401:
+            signer.invalidate()
+            headers = signer.signed_headers(f"adapter-{secrets.token_hex(6)}")
+            headers["Content-Type"] = "application/json"
+            headers["anthropic-version"] = "2023-06-01"
+            headers["x-api-key"] = api_key
+            resp = await client.post(f"{UPSTREAM}/v1/messages", json=body, headers=headers)
+        if resp.status_code in (429, 503) or resp.status_code >= 400:
+            last_error_detail = f"upstream {resp.status_code}: {resp.text[:300]}"
+            if resp.status_code == 429 or "1313" in resp.text or "1113" in resp.text:
+                pool.mark_cooldown(api_key, duration_s=60.0)
+                if attempt < len(all_keys) - 1:
+                    continue
+        # passthrough: relay whatever upstream answered, verbatim
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "application/json"))
+
+    raise HTTPException(status_code=502, detail=last_error_detail or "all keys in pool failed")
+
+
+@app.post("/v1/messages/count_tokens")
+async def count_tokens(request: Request):
+    """Anthropic count_tokens passthrough (same 1:1 semantics as /v1/messages)."""
+    _check_auth(request)
+    pool = _require_pool()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    api_key, signer = pool.get_signer()
+    headers = signer.signed_headers(f"adapter-{secrets.token_hex(6)}")
+    headers["Content-Type"] = "application/json"
+    headers["anthropic-version"] = "2023-06-01"
+    headers["x-api-key"] = api_key
+    client = _get_http_client(request)
+    try:
+        resp = await client.post(f"{UPSTREAM}/v1/messages/count_tokens", json=body, headers=headers)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="upstream timeout")
+    return Response(content=resp.content, status_code=resp.status_code,
+                    media_type=resp.headers.get("content-type", "application/json"))
 
 
 @app.get("/quota")
