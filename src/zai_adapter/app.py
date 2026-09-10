@@ -7,6 +7,10 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -162,6 +166,9 @@ async def quota():
 async def quota_text():
     """Human-readable quota line, used by cron jobs."""
     data = await quota()
-    parts = [f"{w['remaining_pct']}% free (reset {time.strftime('%d.%m %H:%M UTC', time.gmtime(w['reset_at']/1000))})"
-             for w in data["windows"]]
+    parts = []
+    for w in data["windows"]:
+        reset_str = f" (reset {time.strftime('%d.%m %H:%M UTC', time.gmtime(w['reset_at'] / 1000))})" if w.get("reset_at") else ""
+        parts.append(f"{w['remaining_pct']}% free{reset_str}")
     return {"text": f"zai plan {data.get('plan')}: " + "; ".join(parts)}
+
