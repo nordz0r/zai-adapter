@@ -116,3 +116,13 @@ jobs:
           labels: ${{ steps.meta_dh.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Sync Docker Hub README
+        if: steps.dh.outputs.available == 'true'
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: nordz0r/zai-adapter
+          readme-filepath: ./README.md
+          short-description: "OpenAI-compatible endpoint for Z.AI GLM Coding Plan with ZCode client signing (zero-quota tier)"
