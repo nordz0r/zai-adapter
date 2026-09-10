@@ -101,10 +101,27 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
         if blocks:
             out.append({"role": role, "content": blocks})
 
+    # Normalize messages for Anthropic: alternating roles, first message must be user
+    normalized_messages: list[dict] = []
+    for msg in out:
+        r = msg["role"]
+        c = msg["content"]
+        if not normalized_messages:
+            if r == "assistant":
+                normalized_messages.append({"role": "user", "content": [{"type": "text", "text": "Hello"}]})
+            normalized_messages.append({"role": r, "content": list(c)})
+        else:
+            if normalized_messages[-1]["role"] == r:
+                normalized_messages[-1]["content"].extend(c)
+            else:
+                normalized_messages.append({"role": r, "content": list(c)})
+
+    req_max_tokens = body.get("max_completion_tokens") or body.get("max_tokens")
+    max_tokens = int(req_max_tokens) if req_max_tokens else 32768
+
     result: dict = {
         "model": body.get("model") or default_model,
-        "messages": out,
-        "max_tokens": body.get("max_tokens") or 4096,
+        "messages": normalized_messages,
     }
 
     if system_parts:
@@ -116,12 +133,18 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
 
     # Reasoning effort / thinking budget
     effort = body.get("reasoning_effort") or body.get("reasoningEffort")
+    budget: int | None = None
     if effort:
-        budgets = {"low": 1024, "medium": 4096, "high": 8192, "max": 16384}
-        budget = budgets.get(str(effort).lower(), 4096)
-        result["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        budgets = {"low": 2048, "medium": 4096, "high": 8192, "max": 16384}
+        budget = budgets.get(str(effort).lower(), 8192)
     elif "thinking" in body and isinstance(body["thinking"], dict):
-        result["thinking"] = body["thinking"]
+        budget = body["thinking"].get("budget_tokens", 8192)
+
+    if budget is not None:
+        result["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        max_tokens = max(max_tokens, budget + 8192)
+
+    result["max_tokens"] = min(max_tokens, 65536)
 
     # Convert tools
     tools = body.get("tools")
@@ -130,10 +153,14 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
         for t in tools:
             if t.get("type") == "function" and "function" in t:
                 fn = t["function"]
+                params = fn.get("parameters") or {"type": "object", "properties": {}}
+                if isinstance(params, dict) and params.get("type") == "object" and "properties" not in params:
+                    params = dict(params)
+                    params["properties"] = {}
                 anthropic_tools.append({
                     "name": fn.get("name"),
                     "description": fn.get("description", ""),
-                    "input_schema": fn.get("parameters") or {"type": "object", "properties": {}}
+                    "input_schema": params
                 })
             elif "name" in t:
                 anthropic_tools.append(t)
@@ -232,7 +259,7 @@ class StreamTranslator:
                     "model": self.request_model,
                     "choices": [{
                         "index": 0,
-                        "delta": {"role": "assistant", "content": ""},
+                        "delta": {"role": "assistant"},
                         "finish_reason": None
                     }]
                 })
@@ -278,6 +305,7 @@ class StreamTranslator:
             idx = data.get("index", 0)
 
             if dtype == "thinking_delta":
+                thought = delta.get("thinking", "")
                 chunks.append({
                     "id": self.completion_id,
                     "object": "chat.completion.chunk",
@@ -285,7 +313,10 @@ class StreamTranslator:
                     "model": self.request_model,
                     "choices": [{
                         "index": 0,
-                        "delta": {"reasoning_content": delta.get("thinking", "")},
+                        "delta": {
+                            "reasoning_content": thought,
+                            "reasoning": thought,
+                        },
                         "finish_reason": None
                     }]
                 })

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import time
@@ -10,6 +11,8 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("zai_adapter")
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -147,6 +150,12 @@ async def chat_completions(request: Request):
 
     model = anthropic_body["model"]
     want_stream = bool(body.get("stream"))
+    logger.info(
+        "Chat request: model=%s stream=%s messages=%d tools=%d max_tokens=%s thinking=%s",
+        model, want_stream, len(body.get("messages", [])), len(body.get("tools", [])),
+        anthropic_body.get("max_tokens"), bool(anthropic_body.get("thinking"))
+    )
+
     all_keys = pool.all_keys()
     last_error_detail = ""
 
@@ -182,6 +191,7 @@ async def chat_completions(request: Request):
                 err_text = err_bytes.decode("utf-8", errors="replace")
                 await resp.aclose()
                 last_error_detail = f"upstream {resp.status_code}: {err_text[:300]}"
+                logger.warning("Upstream error on key %s: %s", api_key[:10], last_error_detail)
                 if resp.status_code == 429 or "1313" in err_text or "1113" in err_text:
                     pool.mark_cooldown(api_key, duration_s=60.0)
                     if attempt < len(all_keys) - 1:
@@ -207,9 +217,13 @@ async def chat_completions(request: Request):
                                     ev_data = json.loads(raw_data)
                                 except Exception:
                                     continue
-                                chunks = translator.feed_event(current_event, ev_data)
+                                ev_type = ev_data.get("type") or current_event
+                                chunks = translator.feed_event(ev_type, ev_data)
                                 for chunk in chunks:
                                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    except Exception as exc:
+                        logger.error("Error in sse_realtime generator: %s", exc)
+                        raise
                     finally:
                         await resp.aclose()
                     yield "data: [DONE]\n\n"
