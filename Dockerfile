@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir .
 
 RUN useradd --system --uid 10001 --no-create-home zai \
     && chown -R zai:zai /app
-USER zai
+# Numeric uid: runAsNonRoot in k8s cannot verify named users.
+USER 10001
 
 ENV PORT=8100
 EXPOSE 8100
