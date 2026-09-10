@@ -48,7 +48,17 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
         result["temperature"] = body["temperature"]
     if isinstance(body.get("stop"), (str, list)):
         result["stop_sequences"] = body["stop"] if isinstance(body["stop"], list) else [body["stop"]]
+
+    effort = body.get("reasoning_effort") or body.get("reasoningEffort")
+    if effort:
+        budgets = {"low": 1024, "medium": 4096, "high": 8192, "max": 16384}
+        budget = budgets.get(str(effort).lower(), 4096)
+        result["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    elif "thinking" in body and isinstance(body["thinking"], dict):
+        result["thinking"] = body["thinking"]
+
     return result
+
 
 
 def anthropic_to_openai_response(resp: dict, request_model: str) -> dict:
