@@ -77,12 +77,14 @@ async def healthz() -> dict:
 
 
 @app.get("/v1/models")
+@app.get("/models")
 async def models(request: Request):
     _check_auth(request)
     return models_payload()
 
 
 @app.post("/v1/chat/completions")
+@app.post("/chat/completions")
 async def chat_completions(request: Request):
     _check_auth(request)
     s = _require_signer()
