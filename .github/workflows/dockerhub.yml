@@ -118,6 +118,10 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Sync Docker Hub README
+        # Docker Hub API rejects PAT-based JWT on repository metadata endpoints
+        # (403); publishing the image must not fail because of that. Will start
+        # working once Hub grants metadata access to dckr_pat_ tokens.
+        continue-on-error: true
         if: steps.dh.outputs.available == 'true'
         uses: peter-evans/dockerhub-description@v4
         with:
