@@ -68,3 +68,24 @@ def test_parse_quota_windows():
     assert windows[0]["remaining_pct"] == 96
     assert windows[1]["unit"] == 6 and windows[1]["remaining_pct"] == 62
     assert all(w["reset_at"] for w in windows)
+
+
+def test_key_pool_rotation():
+    from zai_adapter.signing import KeyPool
+
+    keys = ["key1.sec1", "key2.sec2", "key3.sec3"]
+    pool = KeyPool(keys, "https://api.test/client")
+
+    k, signer = pool.get_signer()
+    assert k == "key1.sec1"
+
+    # Mark key1 in cooldown -> rotates to key2
+    pool.mark_cooldown("key1.sec1", duration_s=10.0)
+    k2, _ = pool.get_signer()
+    assert k2 == "key2.sec2"
+
+    # Mark key2 in cooldown -> rotates to key3
+    pool.mark_cooldown("key2.sec2", duration_s=10.0)
+    k3, _ = pool.get_signer()
+    assert k3 == "key3.sec3"
+

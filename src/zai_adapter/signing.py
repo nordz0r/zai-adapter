@@ -161,7 +161,46 @@ class Signer:
         }
 
 
+class KeyPool:
+    """Manages a pool of Signer instances, rotating on 429/1313 or rate limits."""
+
+    def __init__(self, api_keys: list[str], handshake_url: str, client_version: str = "0.16.5",
+                 transport: httpx.Client | None = None):
+        self.api_keys = [k.strip() for k in api_keys if k.strip()]
+        self.handshake_url = handshake_url
+        self.client_version = client_version
+        self._transport = transport
+        self._signers = {k: Signer(k, handshake_url, client_version, transport) for k in self.api_keys}
+        self._cooldowns: dict[str, float] = {}
+        self._current_idx = 0
+        self._lock = threading.Lock()
+
+    def get_signer(self) -> tuple[str, Signer]:
+        with self._lock:
+            if not self.api_keys:
+                raise ValueError("no API keys configured in pool")
+            now = time.time()
+            for i in range(len(self.api_keys)):
+                idx = (self._current_idx + i) % len(self.api_keys)
+                k = self.api_keys[idx]
+                if self._cooldowns.get(k, 0) <= now:
+                    self._current_idx = idx
+                    return k, self._signers[k]
+            earliest_key = min(self.api_keys, key=lambda k: self._cooldowns.get(k, 0))
+            return earliest_key, self._signers[earliest_key]
+
+    def mark_cooldown(self, key: str, duration_s: float = 60.0) -> None:
+        with self._lock:
+            self._cooldowns[key] = time.time() + duration_s
+            if self.api_keys:
+                self._current_idx = (self._current_idx + 1) % len(self.api_keys)
+
+    def all_keys(self) -> list[str]:
+        return list(self.api_keys)
+
+
 def build_handshake_body(api_key: str) -> tuple[dict, str, str, str]:
+
     """Pure helper (used by tests): returns (body, key_id, secret, ts)."""
     key_id, secret = split_api_key(api_key)
     ts = str(int(time.time() * 1000))

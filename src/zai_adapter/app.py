@@ -15,8 +15,8 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .signing import Signer, parse_quota
-from .translate import (TranslationError, anthropic_to_openai_chunks,
+from .signing import KeyPool, Signer, parse_quota
+from .translate import (StreamTranslator, TranslationError, anthropic_to_openai_chunks,
                         anthropic_to_openai_response, models_payload, openai_to_anthropic)
 
 UPSTREAM = os.environ.get("ZAI_UPSTREAM_URL", "https://zcode.z.ai/api/v1/ultra-zai/anthropic")
@@ -26,10 +26,13 @@ UPSTREAM_TIMEOUT = float(os.environ.get("ZAI_UPSTREAM_TIMEOUT_S", "120"))
 
 _signer: Signer | None = None
 _signer_key: str | None = None
+_pool: KeyPool | None = None
+_pool_keys_str: str | None = None
 
 
-def _zai_api_key() -> str:
-    return os.environ.get("ZAI_API_KEY", "")
+def _get_api_keys() -> list[str]:
+    raw = os.environ.get("ZAI_API_KEY", "")
+    return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 def _adapter_api_key() -> str:
@@ -40,15 +43,38 @@ def _default_model() -> str:
     return os.environ.get("ZAI_DEFAULT_MODEL", "glm-5.3-flash")
 
 
-def _require_signer() -> Signer:
-    global _signer, _signer_key
-    api_key = _zai_api_key()
-    if not api_key:
+def is_free_window() -> bool:
+    """Free campaign window: 23:00 - 09:00 Singapore Time (UTC+8) -> 15:00 - 01:00 UTC (18:00 - 04:00 MSK)."""
+    utc_hour = time.gmtime().tm_hour
+    return utc_hour >= 15 or utc_hour < 1
+
+
+def check_free_window_guard() -> None:
+    if os.environ.get("ZAI_ONLY_FREE_HOURS", "false").lower() in ("true", "1", "yes"):
+        if not is_free_window():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Free campaign window is currently inactive (active 15:00 - 01:00 UTC / 18:00 - 04:00 MSK). "
+                    "Request blocked by ZAI_ONLY_FREE_HOURS guard."
+                ),
+            )
+
+
+def _require_pool() -> KeyPool:
+    global _pool, _pool_keys_str, _signer
+    raw_keys = os.environ.get("ZAI_API_KEY", "")
+    keys = _get_api_keys()
+    if not keys:
         raise HTTPException(status_code=503, detail="ZAI_API_KEY is not configured")
-    if _signer is None or _signer_key != api_key:
-        _signer = Signer(api_key, HANDSHAKE_URL)
-        _signer_key = api_key
-    return _signer
+    if _signer is not None:
+        pool = KeyPool(keys, HANDSHAKE_URL)
+        pool._signers[keys[0]] = _signer
+        return pool
+    if _pool is None or _pool_keys_str != raw_keys:
+        _pool = KeyPool(keys, HANDSHAKE_URL)
+        _pool_keys_str = raw_keys
+    return _pool
 
 
 def _check_auth(request: Request) -> None:
@@ -59,6 +85,14 @@ def _check_auth(request: Request) -> None:
     token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else request.headers.get("x-api-key", "")
     if not secrets.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail="invalid adapter API key")
+
+
+def _get_http_client(request: Request) -> httpx.AsyncClient:
+    if hasattr(request.app.state, "http") and request.app.state.http is not None:
+        return request.app.state.http
+    client = httpx.AsyncClient(timeout=httpx.Timeout(UPSTREAM_TIMEOUT, connect=15.0))
+    request.app.state.http = client
+    return client
 
 
 @asynccontextmanager
@@ -72,12 +106,20 @@ async def lifespan(app: FastAPI):
         await app.state.http.aclose()
 
 
-app = FastAPI(title="zai-adapter", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="zai-adapter", version="1.1.0", lifespan=lifespan)
 
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"status": "ok", "upstream": UPSTREAM, "signing": bool(_zai_api_key())}
+    keys = _get_api_keys()
+    return {
+        "status": "ok",
+        "upstream": UPSTREAM,
+        "signing": bool(keys),
+        "keys_count": len(keys),
+        "free_window_active": is_free_window(),
+        "free_hours_guard": os.environ.get("ZAI_ONLY_FREE_HOURS", "false").lower() in ("true", "1", "yes")
+    }
 
 
 @app.get("/v1/models")
@@ -91,7 +133,9 @@ async def models(request: Request):
 @app.post("/chat/completions")
 async def chat_completions(request: Request):
     _check_auth(request)
-    s = _require_signer()
+    check_free_window_guard()
+    pool = _require_pool()
+
     try:
         body = await request.json()
     except Exception:
@@ -101,63 +145,154 @@ async def chat_completions(request: Request):
     except TranslationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    session_id = f"adapter-{secrets.token_hex(6)}"
-    headers = s.signed_headers(session_id)
-    headers["Content-Type"] = "application/json"
-    headers["anthropic-version"] = "2023-06-01"
-    headers["x-api-key"] = _zai_api_key()
     model = anthropic_body["model"]
-
     want_stream = bool(body.get("stream"))
-    try:
-        resp = await request.app.state.http.post(
-            f"{UPSTREAM}/v1/messages", json=anthropic_body, headers=headers)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="upstream timeout")
-    if resp.status_code == 401:
-        s.invalidate()
-        headers = s.signed_headers(f"adapter-{secrets.token_hex(6)}")
+    all_keys = pool.all_keys()
+    last_error_detail = ""
+
+    client = _get_http_client(request)
+
+    # Multi-key retry loop on 429 / 1313 / quota limits
+    for attempt in range(len(all_keys)):
+        api_key, signer = pool.get_signer()
+        session_id = f"adapter-{secrets.token_hex(6)}"
+        headers = signer.signed_headers(session_id)
         headers["Content-Type"] = "application/json"
         headers["anthropic-version"] = "2023-06-01"
-        headers["x-api-key"] = _zai_api_key()
-        resp = await request.app.state.http.post(
-            f"{UPSTREAM}/v1/messages", json=anthropic_body, headers=headers)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"upstream {resp.status_code}: {resp.text[:300]}")
-    data = resp.json()
+        headers["x-api-key"] = api_key
 
-    if want_stream:
-        chunks = anthropic_to_openai_chunks(data, model)
+        if want_stream:
+            stream_body = dict(anthropic_body)
+            stream_body["stream"] = True
+            req = client.build_request("POST", f"{UPSTREAM}/v1/messages", json=stream_body, headers=headers)
+            resp = await client.send(req, stream=True)
 
-        def sse():
-            for chunk in chunks:
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
+            if resp.status_code == 401:
+                signer.invalidate()
+                headers = signer.signed_headers(f"adapter-{secrets.token_hex(6)}")
+                headers["Content-Type"] = "application/json"
+                headers["anthropic-version"] = "2023-06-01"
+                headers["x-api-key"] = api_key
+                await resp.aclose()
+                req = client.build_request("POST", f"{UPSTREAM}/v1/messages", json=stream_body, headers=headers)
+                resp = await client.send(req, stream=True)
 
-        return StreamingResponse(sse(), media_type="text/event-stream")
-    return JSONResponse(anthropic_to_openai_response(data, model))
+            if resp.status_code in (429, 503) or resp.status_code >= 400:
+                err_bytes = await resp.aread()
+                err_text = err_bytes.decode("utf-8", errors="replace")
+                await resp.aclose()
+                last_error_detail = f"upstream {resp.status_code}: {err_text[:300]}"
+                if resp.status_code == 429 or "1313" in err_text or "1113" in err_text:
+                    pool.mark_cooldown(api_key, duration_s=60.0)
+                    if attempt < len(all_keys) - 1:
+                        continue
+                raise HTTPException(status_code=502, detail=last_error_detail)
+
+            # Check if upstream returned SSE stream or plain JSON
+            ctype = resp.headers.get("content-type", "")
+            if "text/event-stream" in ctype:
+                translator = StreamTranslator(model)
+
+                async def sse_realtime():
+                    current_event = "message"
+                    try:
+                        async for line in resp.aiter_lines():
+                            if line.startswith("event: "):
+                                current_event = line[7:].strip()
+                            elif line.startswith("data: "):
+                                raw_data = line[6:].strip()
+                                if not raw_data:
+                                    continue
+                                try:
+                                    ev_data = json.loads(raw_data)
+                                except Exception:
+                                    continue
+                                chunks = translator.feed_event(current_event, ev_data)
+                                for chunk in chunks:
+                                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    finally:
+                        await resp.aclose()
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(sse_realtime(), media_type="text/event-stream")
+            else:
+                # JSON fallback for upstream/mock
+                raw_bytes = await resp.aread()
+                await resp.aclose()
+                data = json.loads(raw_bytes.decode("utf-8"))
+                chunks = anthropic_to_openai_chunks(data, model)
+
+                def sse_fallback():
+                    for chunk in chunks:
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(sse_fallback(), media_type="text/event-stream")
+
+        else:
+            # Non-streaming request
+            try:
+                resp = await client.post(
+                    f"{UPSTREAM}/v1/messages", json=anthropic_body, headers=headers)
+            except httpx.TimeoutException:
+                raise HTTPException(status_code=504, detail="upstream timeout")
+
+            if resp.status_code == 401:
+                signer.invalidate()
+                headers = signer.signed_headers(f"adapter-{secrets.token_hex(6)}")
+                headers["Content-Type"] = "application/json"
+                headers["anthropic-version"] = "2023-06-01"
+                headers["x-api-key"] = api_key
+                resp = await client.post(
+                    f"{UPSTREAM}/v1/messages", json=anthropic_body, headers=headers)
+
+            if resp.status_code in (429, 503) or resp.status_code >= 400:
+                last_error_detail = f"upstream {resp.status_code}: {resp.text[:300]}"
+                if resp.status_code == 429 or "1313" in resp.text or "1113" in resp.text:
+                    pool.mark_cooldown(api_key, duration_s=60.0)
+                    if attempt < len(all_keys) - 1:
+                        continue
+                raise HTTPException(status_code=502, detail=last_error_detail)
+
+            data = resp.json()
+            return JSONResponse(anthropic_to_openai_response(data, model))
+
+    raise HTTPException(status_code=502, detail=last_error_detail or "all keys in pool failed")
 
 
 @app.get("/quota")
 async def quota():
-    """Plan quota straight from the Z.AI monitor endpoint (window percentages, resets)."""
-    api_key = _zai_api_key()
-    if not api_key:
-        raise HTTPException(status_code=503, detail="ZAI_API_KEY is not configured")
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(MONITOR_URL, headers={
-                "Authorization": f"Bearer {api_key}", "Accept": "application/json"})
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"monitor unreachable: {exc}")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"monitor returned {resp.status_code}")
-    payload = resp.json()
-    if payload.get("code") != 200:
-        raise HTTPException(status_code=502, detail="monitor rejected the key")
+    """Plan quota from Z.AI monitor endpoint across configured keys."""
+    pool = _require_pool()
+    all_keys = pool.all_keys()
+    results = []
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        for k in all_keys:
+            try:
+                resp = await client.get(MONITOR_URL, headers={
+                    "Authorization": f"Bearer {k}", "Accept": "application/json"})
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    if payload.get("code") == 200:
+                        results.append({
+                            "key_id": k.split(".")[0],
+                            "plan": payload["data"].get("level"),
+                            "windows": parse_quota(payload["data"]),
+                        })
+            except Exception:
+                continue
+
+    if not results:
+        raise HTTPException(status_code=502, detail="monitor rejected or unreachable for all keys")
+
+    primary = results[0]
     return {
-        "plan": payload["data"].get("level"),
-        "windows": parse_quota(payload["data"]),
+        "plan": primary["plan"],
+        "windows": primary["windows"],
+        "all_keys": results,
+        "keys_count": len(all_keys),
+        "free_window_active": is_free_window(),
         "generated_at": int(time.time()),
     }
 
@@ -170,5 +305,6 @@ async def quota_text():
     for w in data["windows"]:
         reset_str = f" (reset {time.strftime('%d.%m %H:%M UTC', time.gmtime(w['reset_at'] / 1000))})" if w.get("reset_at") else ""
         parts.append(f"{w['remaining_pct']}% free{reset_str}")
-    return {"text": f"zai plan {data.get('plan')}: " + "; ".join(parts)}
 
+    status_suffix = " [FREE WINDOW ACTIVE]" if data.get("free_window_active") else " [PAID HOURS]"
+    return {"text": f"zai plan {data.get('plan')}: " + "; ".join(parts) + status_suffix}

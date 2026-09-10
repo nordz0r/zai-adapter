@@ -101,3 +101,22 @@ def test_healthz_reports_signing(monkeypatch):
     client, _ = _make_client(monkeypatch, _upstream_ok)
     data = client.get("/healthz").json()
     assert data["status"] == "ok" and data["signing"] is True
+
+
+def test_free_window_guard(monkeypatch):
+    client, _ = _make_client(monkeypatch, _upstream_ok)
+    monkeypatch.setenv("ZAI_ONLY_FREE_HOURS", "true")
+
+    # Mock is_free_window to False
+    monkeypatch.setattr(app_module, "is_free_window", lambda: False)
+    resp = client.post("/v1/chat/completions", json={
+        "model": "glm-5.3-flash", "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 403
+    assert "18:00 - 04:00 MSK" in resp.json()["detail"]
+
+    # Mock is_free_window to True
+    monkeypatch.setattr(app_module, "is_free_window", lambda: True)
+    resp2 = client.post("/v1/chat/completions", json={
+        "model": "glm-5.3-flash", "messages": [{"role": "user", "content": "hi"}]})
+    assert resp2.status_code == 200
+

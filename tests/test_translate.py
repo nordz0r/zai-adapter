@@ -64,3 +64,50 @@ def test_stream_chunks_shape():
 def test_models_payload():
     data = models_payload()["data"]
     assert "glm-5.3-flash" in [m["id"] for m in data]
+
+
+def test_tools_and_reasoning_effort_translation():
+    from zai_adapter.translate import StreamTranslator
+
+    body = {
+        "model": "glm-5.3-flash",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {"name": "test_fn", "arguments": "{\"x\": 1}"}
+            }]},
+            {"role": "tool", "tool_call_id": "call_123", "content": "res"}
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {"name": "test_fn", "description": "desc", "parameters": {"type": "object"}}
+        }],
+        "tool_choice": "auto",
+        "reasoning_effort": "high"
+    }
+    out = openai_to_anthropic(body)
+    assert out["tools"][0]["name"] == "test_fn"
+    assert out["tool_choice"] == {"type": "auto"}
+    assert out["thinking"]["type"] == "enabled"
+    assert out["thinking"]["budget_tokens"] == 8192
+    assert out["messages"][1]["content"][0]["type"] == "tool_use"
+    assert out["messages"][2]["content"][0]["type"] == "tool_result"
+
+    # Test StreamTranslator
+    st = StreamTranslator("glm-5.3-flash")
+    ch1 = st.feed_event("message_start", {})
+    assert len(ch1) == 1
+    assert ch1[0]["choices"][0]["delta"]["role"] == "assistant"
+
+    ch2 = st.feed_event("content_block_delta", {"index": 0, "delta": {"type": "thinking_delta", "thinking": "plan"}})
+    assert ch2[0]["choices"][0]["delta"]["reasoning_content"] == "plan"
+
+    ch3 = st.feed_event("content_block_delta", {"index": 1, "delta": {"type": "text_delta", "text": "hi"}})
+    assert ch3[0]["choices"][0]["delta"]["content"] == "hi"
+
+    ch4 = st.feed_event("message_delta", {"delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 10}})
+    assert ch4[0]["choices"][0]["finish_reason"] == "stop"
+    assert ch4[0]["usage"]["completion_tokens"] == 10
+
