@@ -141,13 +141,21 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
             result["thinking"] = {"type": "disabled"}
         else:
             budgets = {"low": 2048, "medium": 4096, "high": 16384, "max": 32768}
-            budget = budgets.get(effort_str, 2048)
+            budget = budgets.get(effort_str, 4096)
             result["thinking"] = {"type": "enabled", "budget_tokens": budget}
             max_tokens = max(max_tokens, budget + 16384)
     elif "thinking" in body and isinstance(body["thinking"], dict):
         result["thinking"] = body["thinking"]
         if body["thinking"].get("type") == "enabled":
-            budget = body["thinking"].get("budget_tokens", 2048)
+            budget = body["thinking"].get("budget_tokens", 4096)
+            max_tokens = max(max_tokens, budget + 16384)
+    else:
+        # Default: if reasoning is not explicitly disabled and max_tokens allows it,
+        # enable thinking with 4096 budget for reasoning models like glm-5.3-flash
+        model_name = (body.get("model") or default_model).lower()
+        if ("flash" in model_name or "glm-5" in model_name or "thinking" in model_name) and (not req_max_tokens or int(req_max_tokens) >= 4096):
+            budget = 4096
+            result["thinking"] = {"type": "enabled", "budget_tokens": budget}
             max_tokens = max(max_tokens, budget + 16384)
 
     result["max_tokens"] = min(max_tokens, 131072)
@@ -312,32 +320,35 @@ class StreamTranslator:
 
             if dtype == "thinking_delta":
                 thought = delta.get("thinking", "")
-                chunks.append({
-                    "id": self.completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": self.created,
-                    "model": self.request_model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "reasoning_content": thought,
-                            "reasoning": thought,
-                        },
-                        "finish_reason": None
-                    }]
-                })
+                if thought:
+                    chunks.append({
+                        "id": self.completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": self.created,
+                        "model": self.request_model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "reasoning_content": thought,
+                                "reasoning": thought,
+                            },
+                            "finish_reason": None
+                        }]
+                    })
             elif dtype == "text_delta":
-                chunks.append({
-                    "id": self.completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": self.created,
-                    "model": self.request_model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": delta.get("text", "")},
-                        "finish_reason": None
-                    }]
-                })
+                text = delta.get("text", "")
+                if text:
+                    chunks.append({
+                        "id": self.completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": self.created,
+                        "model": self.request_model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": text},
+                            "finish_reason": None
+                        }]
+                    })
             elif dtype == "input_json_delta":
                 t_info = self.tool_calls_map.get(idx, {"index": 0})
                 chunks.append({
