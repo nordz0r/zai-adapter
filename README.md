@@ -35,6 +35,20 @@ uv run pytest -q
 uv run uvicorn zai_adapter.app:app --port 8100
 ```
 
+## Docker
+
+Локальный запуск:
+
+```bash
+cp .env.example .env      # заполни ZAI_API_KEY (и ADAPTER_API_KEY по желанию)
+docker compose up --build
+# healthz:  curl http://127.0.0.1:8100/healthz
+# квота:    curl http://127.0.0.1:8100/quota/text
+```
+
+Готовый образ: `docker.io/nordz0r/zai-adapter:<tag>` / `ghcr.io/nordz0r/zai-adapter:<tag>`
+(теги `main`, `sha-<commit>`, `v*` — публикует CI).
+
 ## CI/CD
 
 - `ci.yml` — тесты + сборка образа на PR.

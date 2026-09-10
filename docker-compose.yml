@@ -1,0 +1,23 @@
+services:
+  zai-adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nordz0r/zai-adapter:local
+    container_name: zai-adapter
+    restart: unless-stopped
+    ports:
+      - "${ZAI_ADAPTER_PORT:-8100}:8100"
+    environment:
+      # Ключ coding plan вида <id>.<secret> (dd: /root/.zcode/cli/config.json
+      # -> provider.zai.options.apiKey). Обязателен.
+      ZAI_API_KEY: ${ZAI_API_KEY:?set ZAI_API_KEY in .env}
+      # Ключ для защиты самого адаптера (Authorization: Bearer / x-api-key).
+      # Пусто = endpoint без аутентификации.
+      ADAPTER_API_KEY: ${ADAPTER_API_KEY:-}
+      ZAI_DEFAULT_MODEL: ${ZAI_DEFAULT_MODEL:-glm-5.3-flash}
+      # Подписанный upstream по умолчанию; менять не нужно без понимания.
+      ZAI_UPSTREAM_URL: ${ZAI_UPSTREAM_URL:-https://zcode.z.ai/api/v1/ultra-zai/anthropic}
+      ZAI_HANDSHAKE_URL: ${ZAI_HANDSHAKE_URL:-https://api.z.ai/api/paas/c1f3a7e2/v2/client}
+      ZAI_MONITOR_URL: ${ZAI_MONITOR_URL:-https://api.z.ai/api/monitor/usage/quota/limit}
+    # healthcheck наследуется из образа (Dockerfile HEALTHCHECK /healthz).
