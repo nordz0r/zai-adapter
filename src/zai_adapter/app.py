@@ -228,7 +228,12 @@ async def chat_completions(request: Request):
                         await resp.aclose()
                     yield "data: [DONE]\n\n"
 
-                return StreamingResponse(sse_realtime(), media_type="text/event-stream")
+                stream_headers = {
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                }
+                return StreamingResponse(sse_realtime(), media_type="text/event-stream", headers=stream_headers)
             else:
                 # JSON fallback for upstream/mock
                 raw_bytes = await resp.aread()

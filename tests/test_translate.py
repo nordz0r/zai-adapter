@@ -91,10 +91,15 @@ def test_tools_and_reasoning_effort_translation():
     assert out["tools"][0]["name"] == "test_fn"
     assert out["tool_choice"] == {"type": "auto"}
     assert out["thinking"]["type"] == "enabled"
-    assert out["thinking"]["budget_tokens"] == 32768
-    assert out["max_tokens"] >= 49152  # Expanded to allow budget + response
+    assert out["thinking"]["budget_tokens"] == 16384
+    assert out["max_tokens"] >= 32768  # Expanded to allow budget + response
     assert out["messages"][1]["content"][0]["type"] == "tool_use"
     assert out["messages"][2]["content"][0]["type"] == "tool_result"
+
+    # Test disabled thinking (off/none)
+    body_off = dict(body, reasoning_effort="none")
+    out_off = openai_to_anthropic(body_off)
+    assert out_off["thinking"]["type"] == "disabled"
 
     # Test StreamTranslator
     st = StreamTranslator("glm-5.3-flash")

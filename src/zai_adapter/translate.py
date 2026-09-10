@@ -136,14 +136,19 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
     effort = body.get("reasoning_effort") or body.get("reasoningEffort")
     budget: int | None = None
     if effort:
-        budgets = {"low": 4096, "medium": 16384, "high": 32768, "max": 65536}
-        budget = budgets.get(str(effort).lower(), 16384)
+        effort_str = str(effort).lower()
+        if effort_str in ("none", "off", "disable", "disabled", "false"):
+            result["thinking"] = {"type": "disabled"}
+        else:
+            budgets = {"low": 2048, "medium": 4096, "high": 16384, "max": 32768}
+            budget = budgets.get(effort_str, 2048)
+            result["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            max_tokens = max(max_tokens, budget + 16384)
     elif "thinking" in body and isinstance(body["thinking"], dict):
-        budget = body["thinking"].get("budget_tokens", 16384)
-
-    if budget is not None:
-        result["thinking"] = {"type": "enabled", "budget_tokens": budget}
-        max_tokens = max(max_tokens, budget + 16384)
+        result["thinking"] = body["thinking"]
+        if body["thinking"].get("type") == "enabled":
+            budget = body["thinking"].get("budget_tokens", 2048)
+            max_tokens = max(max_tokens, budget + 16384)
 
     result["max_tokens"] = min(max_tokens, 131072)
 
