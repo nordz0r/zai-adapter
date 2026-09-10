@@ -91,8 +91,8 @@ def test_tools_and_reasoning_effort_translation():
     assert out["tools"][0]["name"] == "test_fn"
     assert out["tool_choice"] == {"type": "auto"}
     assert out["thinking"]["type"] == "enabled"
-    assert out["thinking"]["budget_tokens"] == 8192
-    assert out["max_tokens"] >= 16384  # Expanded to allow budget + response
+    assert out["thinking"]["budget_tokens"] == 32768
+    assert out["max_tokens"] >= 49152  # Expanded to allow budget + response
     assert out["messages"][1]["content"][0]["type"] == "tool_use"
     assert out["messages"][2]["content"][0]["type"] == "tool_result"
 
@@ -128,6 +128,6 @@ def test_consecutive_messages_normalized():
     # Consecutive user messages merged into 1 user message
     assert len(out["messages"]) == 2
     assert len(out["messages"][0]["content"]) == 2
-    assert out["max_tokens"] == 32768
+    assert out["max_tokens"] == 128000
 
 

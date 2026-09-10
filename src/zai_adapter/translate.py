@@ -117,7 +117,8 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
                 normalized_messages.append({"role": r, "content": list(c)})
 
     req_max_tokens = body.get("max_completion_tokens") or body.get("max_tokens")
-    max_tokens = int(req_max_tokens) if req_max_tokens else 32768
+    default_max = 128000
+    max_tokens = int(req_max_tokens) if req_max_tokens else default_max
 
     result: dict = {
         "model": body.get("model") or default_model,
@@ -135,16 +136,16 @@ def openai_to_anthropic(body: dict, default_model: str = "glm-5.3-flash") -> dic
     effort = body.get("reasoning_effort") or body.get("reasoningEffort")
     budget: int | None = None
     if effort:
-        budgets = {"low": 2048, "medium": 4096, "high": 8192, "max": 16384}
-        budget = budgets.get(str(effort).lower(), 8192)
+        budgets = {"low": 4096, "medium": 16384, "high": 32768, "max": 65536}
+        budget = budgets.get(str(effort).lower(), 16384)
     elif "thinking" in body and isinstance(body["thinking"], dict):
-        budget = body["thinking"].get("budget_tokens", 8192)
+        budget = body["thinking"].get("budget_tokens", 16384)
 
     if budget is not None:
         result["thinking"] = {"type": "enabled", "budget_tokens": budget}
-        max_tokens = max(max_tokens, budget + 8192)
+        max_tokens = max(max_tokens, budget + 16384)
 
-    result["max_tokens"] = min(max_tokens, 65536)
+    result["max_tokens"] = min(max_tokens, 131072)
 
     # Convert tools
     tools = body.get("tools")
