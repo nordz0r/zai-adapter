@@ -53,3 +53,18 @@ def test_find_private_cipher_nested():
     payload = {"code": 0, "data": {"result": {"privateCipher": "AAA="}}}
     assert find_private_cipher(payload) == "AAA="
     assert find_private_cipher({"nothing": 1}) is None
+
+
+def test_parse_quota_windows():
+    from zai_adapter.signing import parse_quota
+    data = {"limits": [
+        {"type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 4,
+         "remaining": 1909, "nextResetTime": 1789002385682},
+        {"type": "CREDIT_LIMIT", "unit": 6, "number": 1, "percentage": 38,
+         "remaining": 6151, "nextResetTime": 1789500606984},
+    ]}
+    windows = parse_quota(data)
+    assert windows[0]["unit"] == 3 and windows[0]["number"] == 5
+    assert windows[0]["remaining_pct"] == 96
+    assert windows[1]["unit"] == 6 and windows[1]["remaining_pct"] == 62
+    assert all(w["reset_at"] for w in windows)

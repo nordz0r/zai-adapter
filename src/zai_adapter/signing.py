@@ -176,7 +176,8 @@ def parse_quota(data: dict) -> list[dict]:
     for lim in data.get("limits", []):
         windows.append({
             "type": lim.get("type"),
-            "window_hours": lim.get("number") if lim.get("unit") == 3 else None,
+            "unit": lim.get("unit"),
+            "number": lim.get("number"),
             "used_pct": lim.get("percentage"),
             "remaining_pct": 100 - lim.get("percentage", 0),
             "remaining": lim.get("remaining"),
