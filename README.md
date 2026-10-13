@@ -1,11 +1,65 @@
-# zai-adapter
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/banner-light.svg">
+    <img alt="nordz0r/zai-adapter — адаптер Z.AI GLM Coding Plan" src=".github/assets/banner-light.svg" width="100%">
+  </picture>
+</p>
+
+<p align="center"><b>Русский</b> · <a href="README.en.md">English</a></p>
+
+<p align="center">
+  <a href="https://github.com/nordz0r/zai-adapter/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nordz0r/zai-adapter/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white">
+  <a href="https://hub.docker.com/r/nordz0r/zai-adapter"><img alt="Docker Hub" src="https://img.shields.io/badge/docker-nordz0r%2Fzai--adapter-2496ed?style=flat-square&logo=docker&logoColor=white"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+</p>
 
 OpenAI-совместимый endpoint для Z.AI GLM Coding Plan с **подписью клиента ZCode**
 (та же криптография, что у десктопного ZCode: handshake → Ed25519 → proof-of-work).
 Подписанные запросы проходят по тарифу «via ZCode» — в окне акции GLM-5.3-Flash
 расход квоты плана равен нулю.
 
-## Endpoints
+## Установка
+
+### Docker
+
+Локальный запуск:
+
+```bash
+cp .env.example .env      # заполни ZAI_API_KEY (и ADAPTER_API_KEY по желанию)
+docker compose up --build
+# healthz:  curl http://127.0.0.1:8100/healthz
+# квота:    curl http://127.0.0.1:8100/quota/text
+```
+
+Готовый образ: `docker.io/nordz0r/zai-adapter:<tag>` / `ghcr.io/nordz0r/zai-adapter:<tag>`
+(теги `main`, `sha-<commit>`, `v*` — публикует CI).
+
+### Из исходников
+
+```bash
+uv sync
+uv run uvicorn zai_adapter.app:app --port 8100
+```
+
+На Windows то же делает `run.bat` (с `--host 0.0.0.0 --reload`).
+
+## Использование
+
+Клиенту OpenAI укажите базовый адрес `http://127.0.0.1:8100/v1` и, если задан `ADAPTER_API_KEY`, передайте его как `Authorization: Bearer …` или `x-api-key`:
+
+```bash
+curl http://127.0.0.1:8100/v1/chat/completions \
+  -H "Authorization: Bearer $ADAPTER_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"ping"}]}'
+```
+
+Anthropic-совместимым клиентам — тот же адрес без `/v1`: запросы идут в `/v1/messages`.
+
+### Endpoints
+
 
 | Метод | Путь | Назначение |
 |---|---|---|
@@ -17,7 +71,8 @@ OpenAI-совместимый endpoint для Z.AI GLM Coding Plan с **подп
 | GET | `/quota` | квота плана из `api.z.ai/api/monitor/usage/quota/limit` (JSON) |
 | GET | `/quota/text` | человекочитаемая строка для cron |
 
-## Env
+### Переменные окружения
+
 
 | Переменная | Назначение |
 |---|---|
@@ -34,22 +89,7 @@ OpenAI-совместимый endpoint для Z.AI GLM Coding Plan с **подп
 ```bash
 uv sync
 uv run pytest -q
-uv run uvicorn zai_adapter.app:app --port 8100
 ```
-
-## Docker
-
-Локальный запуск:
-
-```bash
-cp .env.example .env      # заполни ZAI_API_KEY (и ADAPTER_API_KEY по желанию)
-docker compose up --build
-# healthz:  curl http://127.0.0.1:8100/healthz
-# квота:    curl http://127.0.0.1:8100/quota/text
-```
-
-Готовый образ: `docker.io/nordz0r/zai-adapter:<tag>` / `ghcr.io/nordz0r/zai-adapter:<tag>`
-(теги `main`, `sha-<commit>`, `v*` — публикует CI).
 
 ## CI/CD
 
@@ -57,3 +97,7 @@ docker compose up --build
 - `dockerhub.yml` — тесты + публикация `nordz0r/zai-adapter` (Docker Hub) и
   `ghcr.io/nordz0r/zai-adapter` на push в main и теги `v*`.
   Требуются секреты репозитория: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).
