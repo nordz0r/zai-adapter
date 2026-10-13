@@ -58,6 +58,14 @@ curl http://127.0.0.1:8100/v1/chat/completions \
 
 Anthropic-compatible clients use the same origin without `/v1`: requests go to `/v1/messages`.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/architecture-light.svg">
+    <img alt="zai-adapter request path: OpenAI/Anthropic clients → app.py → translate/sign → Z.AI signed upstream" src=".github/assets/architecture-light.svg" width="100%">
+  </picture>
+</p>
+
 ### Endpoints
 
 | Method | Path | Purpose |

@@ -58,6 +58,14 @@ curl http://127.0.0.1:8100/v1/chat/completions \
 
 Anthropic-совместимым клиентам — тот же адрес без `/v1`: запросы идут в `/v1/messages`.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset=".github/assets/architecture-light.svg">
+    <img alt="Путь запроса zai-adapter: клиенты OpenAI/Anthropic → app.py → трансляция/подпись → подписанный upstream Z.AI" src=".github/assets/architecture-light.svg" width="100%">
+  </picture>
+</p>
+
 ### Endpoints
 
 
