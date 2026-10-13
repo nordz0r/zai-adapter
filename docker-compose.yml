@@ -9,7 +9,7 @@ services:
     ports:
       - "${ZAI_ADAPTER_PORT:-8100}:8100"
     environment:
-      # Ключ coding plan вида <id>.<secret> (dd: /root/.zcode/cli/config.json
+      # Ключ coding plan вида <id>.<secret> (~/.zcode/cli/config.json
       # -> provider.zai.options.apiKey). Обязателен.
       ZAI_API_KEY: ${ZAI_API_KEY:?set ZAI_API_KEY in .env}
       # Ключ для защиты самого адаптера (Authorization: Bearer / x-api-key).
