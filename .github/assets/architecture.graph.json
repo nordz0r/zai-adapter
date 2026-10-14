@@ -1,0 +1,246 @@
+{
+ "schemaVersion": "0.2.0",
+ "kind": "graph",
+ "id": "zai-adapter-architecture",
+ "generatedAt": "2026-10-13T18:00:00.000Z",
+ "title": "zai-adapter request path",
+ "summary": "OpenAI and Anthropic clients call the adapter; it signs requests like ZCode (handshake, Ed25519, proof-of-work) and forwards them to the Z.AI upstream.",
+ "lenses": [
+  "architecture"
+ ],
+ "layout": {
+  "direction": "right",
+  "laneOrder": [
+   "client",
+   "ad",
+   "zai"
+  ],
+  "rank": {
+   "oai": 0,
+   "ant": 1,
+   "cron": 2,
+   "app": 1,
+   "tr": 0,
+   "sign": 2,
+   "hs": 3,
+   "up": 1,
+   "mon": 2
+  }
+ },
+ "provenance": {
+  "repo": {
+   "owner": "nordz0r",
+   "name": "zai-adapter",
+   "host": "github.com"
+  },
+  "base": {
+   "sha": "0000000000000000000000000000000000000000",
+   "ref": "main"
+  },
+  "head": {
+   "sha": "0000000000000000000000000000000000000000",
+   "ref": "main"
+  },
+  "generator": {
+   "name": "manual",
+   "version": "1.0.0"
+  }
+ },
+ "lanes": [
+  {
+   "id": "client",
+   "label": "Clients",
+   "subtitle": "OpenAI · Anthropic",
+   "order": 0
+  },
+  {
+   "id": "ad",
+   "label": "zai-adapter",
+   "subtitle": "FastAPI :8100",
+   "order": 1
+  },
+  {
+   "id": "zai",
+   "label": "Z.AI",
+   "subtitle": "upstream",
+   "order": 2
+  }
+ ],
+ "nodes": [
+  {
+   "id": "oai",
+   "label": "OpenAI client",
+   "kind": "ui",
+   "delta": "unchanged",
+   "lane": "client",
+   "subtitle": "/v1/chat/completions",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "ant",
+   "label": "Anthropic client",
+   "kind": "ui",
+   "delta": "unchanged",
+   "lane": "client",
+   "subtitle": "/v1/messages, count_tokens",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "cron",
+   "label": "cron / monitoring",
+   "kind": "external",
+   "delta": "unchanged",
+   "lane": "client",
+   "subtitle": "/quota/text, /healthz",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "app",
+   "label": "app.py",
+   "kind": "service",
+   "delta": "unchanged",
+   "lane": "ad",
+   "subtitle": "ADAPTER_API_KEY check",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "tr",
+   "label": "translate.py",
+   "kind": "module",
+   "delta": "unchanged",
+   "lane": "ad",
+   "subtitle": "OpenAI → Anthropic wire",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "sign",
+   "label": "signing.py",
+   "kind": "module",
+   "delta": "unchanged",
+   "lane": "ad",
+   "subtitle": "handshake → Ed25519 → PoW",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "hs",
+   "label": "Handshake API",
+   "kind": "external",
+   "delta": "unchanged",
+   "lane": "zai",
+   "subtitle": "ZAI_HANDSHAKE_URL",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "up",
+   "label": "Signed upstream",
+   "kind": "external",
+   "delta": "unchanged",
+   "lane": "zai",
+   "subtitle": "ZAI_UPSTREAM_URL (anthropic)",
+   "files": [],
+   "badges": []
+  },
+  {
+   "id": "mon",
+   "label": "Monitor API",
+   "kind": "external",
+   "delta": "unchanged",
+   "lane": "zai",
+   "subtitle": "quota limit",
+   "files": [],
+   "badges": []
+  }
+ ],
+ "edges": [
+  {
+   "id": "e0",
+   "from": "oai",
+   "to": "app",
+   "kind": "http",
+   "delta": "unchanged",
+   "emphasis": "normal",
+   "animated": true,
+   "files": []
+  },
+  {
+   "id": "e1",
+   "from": "ant",
+   "to": "app",
+   "kind": "http",
+   "delta": "unchanged",
+   "label": "1:1 passthrough",
+   "emphasis": "hero",
+   "animated": true,
+   "files": []
+  },
+  {
+   "id": "e2",
+   "from": "cron",
+   "to": "app",
+   "kind": "http",
+   "delta": "unchanged",
+   "emphasis": "muted",
+   "animated": false,
+   "files": []
+  },
+  {
+   "id": "e3",
+   "from": "app",
+   "to": "tr",
+   "kind": "call",
+   "delta": "unchanged",
+   "emphasis": "normal",
+   "animated": true,
+   "files": []
+  },
+  {
+   "id": "e4",
+   "from": "app",
+   "to": "sign",
+   "kind": "call",
+   "delta": "unchanged",
+   "emphasis": "normal",
+   "animated": true,
+   "files": []
+  },
+  {
+   "id": "e5",
+   "from": "sign",
+   "to": "hs",
+   "kind": "http",
+   "delta": "unchanged",
+   "emphasis": "muted",
+   "animated": false,
+   "files": []
+  },
+  {
+   "id": "e6",
+   "from": "app",
+   "to": "up",
+   "kind": "http",
+   "delta": "unchanged",
+   "label": "signed request",
+   "emphasis": "hero",
+   "animated": true,
+   "files": []
+  },
+  {
+   "id": "e7",
+   "from": "app",
+   "to": "mon",
+   "kind": "http",
+   "delta": "unchanged",
+   "emphasis": "muted",
+   "animated": false,
+   "files": []
+  }
+ ],
+ "flows": []
+}
